@@ -167,7 +167,7 @@ async function onNarrateOneMessage() {
 
     resetTtsPlayback();
     processAndQueueTtsMessage(message, Number(id), { manual: true });
-    moduleWorker();
+    wrapper.update();
 }
 
 async function onNarrateText(args, text) {
@@ -729,6 +729,38 @@ async function processTtsQueue() {
             return;
         }
 
+        // Fast path for the common single-voice case. This avoids bouncing a
+        // single "other" segment back through the queue and ensures narration
+        // starts immediately for standard reply playback.
+        if (!extension_settings.tts.multi_voice_enabled) {
+            const voiceMapEntry = voiceMap[char] === DEFAULT_VOICE_MARKER ? voiceMap[DEFAULT_VOICE_MARKER] : voiceMap[char];
+
+            if (voiceMapEntry === DISABLED_VOICE_MARKER) {
+                const storageKey = `tts_disabled_warned_${char}`;
+                if (!accountStorage.getItem(storageKey) || currentTtsJob.manual) {
+                    accountStorage.setItem(storageKey, 'true');
+                    toastr.info(`TTS voice for ${char} is disabled.`);
+                }
+                currentTtsJob = null;
+                setTimeout(() => wrapper.update(), 0);
+                return;
+            }
+
+            if (!voiceMapEntry) {
+                throw `${char} not in voicemap. Configure character in extension settings voice map`;
+            }
+
+            const voice = await ttsProvider.getVoice(voiceMapEntry);
+            const voiceId = voice.voice_id;
+            if (voiceId == null) {
+                toastr.error(`Specified voice for ${char} was not found. Check the TTS extension settings.`);
+                throw `Unable to attain voiceId for ${char}`;
+            }
+
+            await tts(text, voiceId, char, char);
+            return;
+        }
+
         // Parse message into segments if multi-voice is enabled
         const segments = parseMessageSegments(text);
 
@@ -1190,6 +1222,7 @@ async function onMessageEvent(messageId, lastCharIndex) {
         ttsJobQueue.push(message);
     } else {
         processAndQueueTtsMessage(message, messageId, { manual: false });
+        setTimeout(() => wrapper.update(), 0);
     }
 }
 
@@ -1249,6 +1282,29 @@ async function onGenerationEnded() {
         periodicMessageGenerationTimer = null;
     }
     lastPositionOfParagraphEnd = -1;
+
+    // Fallback for non-streaming replies: some rendering paths can miss the
+    // message-rendered hook, so explicitly narrate the final assistant message.
+    if (!extension_settings.tts.enabled || !extension_settings.tts.auto_generation || isStreamingEnabled()) {
+        return;
+    }
+
+    const context = getContext();
+    if (!context.groupId && context.characterId === undefined) {
+        return;
+    }
+
+    const lastMessageId = context.chat.length - 1;
+    if (lastMessageId < 0) {
+        return;
+    }
+
+    const lastMessage = context.chat[lastMessageId];
+    if (!lastMessage || lastMessage.is_user) {
+        return;
+    }
+
+    await onMessageEvent(lastMessageId);
 }
 
 async function onPeriodicMessageGenerationTick() {

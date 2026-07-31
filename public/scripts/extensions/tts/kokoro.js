@@ -1,6 +1,6 @@
 import { debounce_timeout } from '../../constants.js';
 import { debounceAsync, splitRecursive } from '../../utils.js';
-import { getPreviewString, saveTtsProviderSettings } from './index.js';
+import { saveTtsProviderSettings } from './index.js';
 
 export class KokoroTtsProvider {
     constructor() {
@@ -47,6 +47,7 @@ export class KokoroTtsProvider {
         this.separator = ' ... ... ... ';
         this.pendingRequests = new Map();
         this.nextRequestId = 1;
+        this.isGenerating = false;
 
         // Update display values immediately but only reinitialize TTS after a delay
         this.initTtsDebounced = debounceAsync(this.initializeWorker.bind(this), debounce_timeout.relaxed);
@@ -267,18 +268,31 @@ export class KokoroTtsProvider {
             await this.checkReady();
         }
 
-        const voice = this.getVoice(voiceId);
-        const previewText = getPreviewString(voice.lang);
+        if (typeof globalThis.tts_unlock_audio === 'function') {
+            await globalThis.tts_unlock_audio();
+        }
+
+        const previewText = 'Hello, this is a voice preview.';
         for await (const response of this.generateTts(previewText, voiceId)) {
             const audio = await response.blob();
             const url = URL.createObjectURL(audio);
-            await new Promise(resolve => {
-                const audioElement = new Audio();
+            await new Promise((resolve, reject) => {
+                const audioElement = document.getElementById('tts_audio') instanceof HTMLAudioElement
+                    ? document.getElementById('tts_audio')
+                    : new Audio();
                 audioElement.src = url;
-                audioElement.play();
+                audioElement.load();
                 audioElement.onended = () => resolve();
+                audioElement.onerror = () => reject(new Error('Preview audio playback failed'));
+                audioElement.play().catch(reject);
             });
             URL.revokeObjectURL(url);
+        }
+    }
+
+    async waitForIdle() {
+        while (this.isGenerating) {
+            await new Promise(resolve => setTimeout(resolve, 50));
         }
     }
 
@@ -317,28 +331,35 @@ export class KokoroTtsProvider {
             throw new Error('Empty text');
         }
 
-        const voice = this.getVoice(voiceId);
-        const requestId = this.nextRequestId++;
+        await this.waitForIdle();
+        this.isGenerating = true;
 
-        const chunkSize = 400;
-        const chunks = splitRecursive(text, chunkSize, ['\n\n', '\n', '.', '?', '!', ',', ' ', '']);
+        try {
+            const voice = this.getVoice(voiceId);
+            const requestId = this.nextRequestId++;
 
-        for (const chunk of chunks) {
-            yield await new Promise((resolve, reject) => {
-                // Store the promise callbacks
-                this.pendingRequests.set(requestId, { resolve, reject });
+            const chunkSize = 400;
+            const chunks = splitRecursive(text, chunkSize, ['\n\n', '\n', '.', '?', '!', ',', ' ', '']);
 
-                // Send the request to the worker
-                this.worker.postMessage({
-                    action: 'generateTts',
-                    data: {
-                        text: chunk,
-                        voice: voice.voice_id,
-                        speakingRate: this.settings.speakingRate || 1.0,
-                        requestId,
-                    },
+            for (const chunk of chunks) {
+                yield await new Promise((resolve, reject) => {
+                    // Store the promise callbacks
+                    this.pendingRequests.set(requestId, { resolve, reject });
+
+                    // Send the request to the worker
+                    this.worker.postMessage({
+                        action: 'generateTts',
+                        data: {
+                            text: chunk,
+                            voice: voice.voice_id,
+                            speakingRate: this.settings.speakingRate || 1.0,
+                            requestId,
+                        },
+                    });
                 });
-            });
+            }
+        } finally {
+            this.isGenerating = false;
         }
     }
 
