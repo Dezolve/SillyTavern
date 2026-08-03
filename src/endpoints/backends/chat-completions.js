@@ -2616,6 +2616,16 @@ router.post('/generate', async function (request, response) {
             }
         }
     } catch (error) {
+        if (error.name === 'AbortError') {
+            console.info('Streaming request aborted by client');
+
+            if (!response.writableEnded) {
+                response.end();
+            }
+
+            return;
+        }
+
         console.error('Generation failed', error);
         const message = error.code === 'ECONNREFUSED'
             ? `Connection refused: ${error.message}`
