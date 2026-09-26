@@ -21,6 +21,11 @@ if %errorlevel% neq 0 (
 )
 set NODE_ENV=production
 call npm install --no-save --no-audit --no-fund --loglevel=error --no-progress --omit=dev --ignore-scripts
+call "%~dp0Ensure-Kobold.bat"
+if %errorlevel% neq 0 (
+    echo [91mKoboldCpp could not be started.[0m
+    goto end
+)
 node server.js %*
 :end
 pause
