@@ -2,7 +2,7 @@
 setlocal
 
 set "KOBOLDCPP_EXE=%~dp0..\KoboldCpp\koboldcpp.exe"
-set "MODEL_PATH=%~dp0..\Models\L3-8B-Stheno-v3.2-Q4_K_S.gguf"
+set "MODEL_PATH=%~dp0..\Models\14B-Qwen2.5-Kunou-v1.i1-Q4_K_M.gguf"
 set "MODEL_URL=http://127.0.0.1:5001/v1/models"
 
 REM Reuse a healthy backend if one is already running.
